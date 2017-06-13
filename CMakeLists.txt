@@ -36,7 +36,7 @@ set(ARDUINO_PROJECT_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(ARDUINO_EXTRA_CXXFLAGS "")
 
 set(BOARD_TAG   uno)
-set(BAUD_RATE   115200)
+set(BAUD_RATE   57600)
 find_program(ARDUINO_BIN arduino )
 
 set(ARDUINO_BOARD_FILE hardware/arduino/boards.txt)

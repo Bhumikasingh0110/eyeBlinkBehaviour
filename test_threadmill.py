@@ -84,26 +84,21 @@ def calculate_motion( t, s1, s2 ):
     v2 = compute_speed( t, s2 )
     # gpl.plot( (t, s1), (t, s2), terminal = 'X11' )
     speed = (v1+v2)/2.0
-    dire = calculate_direction( s1, s2 )
+    dire = calculate_direction( t[-1] - t[0], s1, s2 )
 
     with open( res_file_, 'a' ) as f:
         f.write( '%g %g %g %g %g %g\n' % (t[-1], s1[-1], s2[-1], v1, v2, dire ) )
 
     return speed, dire
 
-def calculate_direction( s1, s2 ):
+def calculate_direction( dt, s1, s2 ):
     """Infer direction. 
-    By computing the phase lag between singal.
+    By computing the correlation.
     """
-    x1 = sig.hilbert( s1 )
-    x2 = sig.hilbert( s2 )
-    p1 = np.unwrap( np.angle( x1 ) )
-    p2 = np.unwrap( np.angle( x2 ) )
-    print( p1 )
-    print( p2 )
-    print( '====' )
-    return np.mean( p1 - p2 )
-
+    l = len( s1 )
+    x = sig.correlate( s1, s2, 'same' )
+    p = np.argmax( x ) - l / 2
+    return np.sign( p )
 
 def main( port, baud ):
     print( '[INFO] Using port %s baudrate %d' % (port, baud ) )
@@ -124,7 +119,7 @@ def main( port, baud ):
         motion1.append( data[5] )
         motion2.append( data[6] )
         try:
-            N = 10
+            N = 20
             speed,direction = calculate_motion( tvec[-N:], motion1[-N:], motion2[-N:] )
         except Exception as e:
             speed = 0.0

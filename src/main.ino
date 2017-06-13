@@ -277,7 +277,7 @@ void wait_for_start( )
 
 void setup()
 {
-    Serial.begin( 115200 );
+    Serial.begin( 57600 );
 
     // Random seed.
     randomSeed( analogRead(A5) );
