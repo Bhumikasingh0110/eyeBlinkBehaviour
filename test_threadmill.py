@@ -75,24 +75,35 @@ def compute_speed( tvec, yvec ):
     return velocity
 
 
-def calculate_motion( t, dx, dy ):
+def calculate_motion( t, s1, s2 ):
     """Caculate speed and direction of motion """
-    t, dx, dy = [ np.array( x ) for x in [ t, dx, dy] ]
-    s = np.sqrt( dx ** 2.0 + dy ** 2.0 )
-    ds = np.mean( s )
-    if np.mean( dx ) < 0:
-        ds = -ds 
+    t, s1, s2 = [ np.array( x ) for x in [ t, s1, s2] ]
+    s1H = sig.hilbert( s1 )
+    s2H = sig.hilbert( s2 )
+    v1 = compute_speed( t, s1 )
+    v2 = compute_speed( t, s2 )
+    # gpl.plot( (t, s1), (t, s2), terminal = 'X11' )
+    speed = (v1+v2)/2.0
+    dire = calculate_direction( s1, s2 )
 
-    dt = t[-1] - t[0]
-    return ds / dt, 1.0
+    with open( res_file_, 'a' ) as f:
+        f.write( '%g %g %g %g %g %g\n' % (t[-1], s1[-1], s2[-1], v1, v2, dire ) )
+
+    return speed, dire
 
 def calculate_direction( s1, s2 ):
-    d = -1
-    if s1 > s2:
-        d = 1
-    else:
-        d = -1
-    return d
+    """Infer direction. 
+    By computing the phase lag between singal.
+    """
+    x1 = sig.hilbert( s1 )
+    x2 = sig.hilbert( s2 )
+    p1 = np.unwrap( np.angle( x1 ) )
+    p2 = np.unwrap( np.angle( x2 ) )
+    print( p1 )
+    print( p2 )
+    print( '====' )
+    return np.mean( p1 - p2 )
+
 
 def main( port, baud ):
     print( '[INFO] Using port %s baudrate %d' % (port, baud ) )
@@ -103,7 +114,6 @@ def main( port, baud ):
     with open( res_file_, 'w' ) as f:
         f.write( "time s1 s2 v1 v2 dir\n" )
 
-    speedVec = [ ]
     while True:
         line = ar.read_line( )
         data = line_to_data( line )
@@ -114,13 +124,8 @@ def main( port, baud ):
         motion1.append( data[5] )
         motion2.append( data[6] )
         try:
-            N = 20
+            N = 10
             speed,direction = calculate_motion( tvec[-N:], motion1[-N:], motion2[-N:] )
-            speedVec.append( speed )
-            gpl.plot(
-                    np.array( tvec[-1000:] ), np.array( speedVec[-1000:]) 
-                    , set = ( 'yrange [-0.01:0.01]' )
-                    )
         except Exception as e:
             speed = 0.0
             direction = 0

@@ -14,7 +14,7 @@
 
 #include <avr/wdt.h>
 
-#define USE_MOUSE 
+// #define USE_MOUSE 
 #ifdef USE_MOUSE
 #include "arduino-ps2-mouse/PS2Mouse.h"
 #endif
@@ -277,7 +277,7 @@ void wait_for_start( )
 
 void setup()
 {
-    Serial.begin( 38400 );
+    Serial.begin( 115200 );
 
     // Random seed.
     randomSeed( analogRead(A5) );

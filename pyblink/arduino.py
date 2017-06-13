@@ -24,7 +24,7 @@ import logging
 # Create a class to handle serial port.
 class ArduinoPort( ):
 
-    def __init__(self, path, baud_rate = 38400, **kwargs):
+    def __init__(self, path, baud_rate = 115200, **kwargs):
         self.path = path
         config.args_.port = path
         self.baudRate = baud_rate
