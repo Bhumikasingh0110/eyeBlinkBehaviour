@@ -12,38 +12,25 @@
  *        License:  GNU GPL2
  */
 
-#include <avr/wdt.h>
-
 // #define USE_MOUSE 
 #ifdef USE_MOUSE
 #include "arduino-ps2-mouse/PS2Mouse.h"
 #endif
 
-// Pins etc.
-#define         TONE_PIN                    2
-#define         LED_PIN                     3
-
-// These pins are more than 7.
-#define         CAMERA_TTL_PIN              10
-#define         PUFF_PIN                    11
-#define         IMAGING_TRIGGER_PIN         13
-
-#define         SENSOR_PIN                  A5
-
-#define         TONE_FREQ                   4500
-
-#define         PUFF_DURATION               50
-#define         TONE_DURATION               50
-#define         LED_DURATION                50
 
 #ifdef USE_MOUSE
 // Motion detection related.
-#define         CLOCK_PIN                 6
-#define         DATA_PIN                  7
+#define         CLOCK_PIN               6
+#define         DATA_PIN                7
 #else
-#define         MOTION1_PIN                 6
-#define         MOTION2_PIN                 7
+#define         MOTION1_PIN             6
+#define         MOTION2_PIN             7
 #endif 
+
+#define         SPEED_OUT_PIN           5
+#define         MAX_SPEED_COMPUTATIONS  5
+
+#define         MAX_DIRECTION_COMPUTATION 10
 
 
 // Motion detection based on motor
@@ -51,22 +38,86 @@
 
 
 unsigned long stamp_            = 0;
-unsigned dt_                    = 2;
-unsigned write_dt_              = 2;
-unsigned trial_count_           = 0;
-
-char msg_[80];
-
-unsigned long trial_start_time_ = 0;
-
-
-char trial_state_[5]            = "PRE_";
-
-/*-----------------------------------------------------------------------------
- *  User response
- *-----------------------------------------------------------------------------*/
-int incoming_byte_              = 0;
+char msg_[20];
 bool reboot_                    = false;
+
+const size_t l_ = 100;
+int motion1_[l_];
+int motion2_[l_];
+
+
+int t_[ l_ ];
+
+float speed_ = 0.0;
+int direction_ = 0;
+
+float speed_array_[ MAX_SPEED_COMPUTATIONS ];
+int down_trans1_[ MAX_DIRECTION_COMPUTATION ];
+int down_trans2_[ MAX_DIRECTION_COMPUTATION ];
+
+// Latest value comes at the end. Useful for keeping time.
+void append( int* array, int val, size_t l )
+{
+    // Upto array[1] from array[l-1]
+    for( size_t i = 0; i < l - 1; i ++ )
+        array[i] = array[i + 1];
+    array[ l_ - 1 ] = val;
+}
+
+// Latest value comes in the begining.
+void prepend( int* array, int val, size_t l )
+{
+    // Upto array[1] from array[l-1]
+    for( size_t i = l-1; i > 0; i -- )
+        array[i] = array[i - 1];
+
+    array[ 0 ] = val;
+}
+
+void prependf( float* array, float val, size_t l )
+{
+    // Upto array[1] from array[l_-1]
+    for( size_t i = l-1; i > 0; i -- )
+        array[i] = array[i - 1];
+
+    array[ 0 ] = val;
+}
+
+void print_array( int* arr, size_t n )
+{
+    for (size_t i = 0; i < n; i++) 
+    {
+        Serial.print( arr[i] );
+        Serial.print( ' ' );
+    }
+    Serial.println( ' ' );
+    Serial.flush( );
+}
+
+void print_farray( float* arr, size_t n )
+{
+    for (size_t i = 0; i < n; i++) 
+    {
+        float x = arr[i];
+        Serial.print( x, 4 );
+        Serial.print( ' ' );
+    }
+    Serial.println( ' ' );
+    Serial.flush( );
+}
+
+void init_farray( float* arr, size_t n )
+{
+    for (size_t i = 0; i < n; i++) 
+        arr[i] = 0.0;
+}
+
+void init_array( int* arr, size_t n )
+{
+    for (size_t i = 0; i < n; i++) 
+        arr[i] = 0;
+}
+
 
 /*
  * MOUSE
@@ -75,50 +126,115 @@ bool reboot_                    = false;
 PS2Mouse mouse( CLOCK_PIN, DATA_PIN );
 #endif
 
-/*-----------------------------------------------------------------------------
- *  WATCH DOG
- *-----------------------------------------------------------------------------*/
-/**
- * @brief Interrupt serviving routine.
- *
- * @param _vect
- */
-ISR(WDT_vect)
+
+bool is_low_transition( int prev, int cur )
 {
-    // Handle interuppts here.
-    // Nothing to handle.
-}
-
-void reset_watchdog( )
-{
-    if( not reboot_ )
-        wdt_reset( );
-}
-
-
-/**
- * @brief  Read a command from command line. Consume when character is matched.
- *
- * @param command
- *
- * @return False when not mactched. If first character is matched, it is
- * consumed, second character is left in  the buffer.
- */
-bool is_command_read( char command, bool consume = true )
-{
-    if( ! Serial.available() )
-        return false;
-
-    // Peek for the first character.
-    if( command == Serial.peek( ) )
+    bool res = ( 1 == prev ) && (0 == cur );
+#if 0
+    if( res )
     {
-        if( consume )
-            Serial.read( );
-        return true;
+        Serial.print( prev );
+        Serial.print( cur );
+        Serial.print( 'x' );
+    }
+#endif
+    return res;
+}
+
+/**
+ * @brief Compute speed of threadmill. 
+ * The maximum speed of mouse is taken to be 1 m/sec.
+ *
+ * On analog pin, 1m/s represents 255 i.e. we have a resolution of 1/255 m/s.
+ */
+float compute_speed( int* arr, size_t l, float dW = 14.0 )
+{
+
+    int numComputations = 0;
+
+    float resolutionV_ = 1.0 / 255.0;
+    bool startEstimate = false;
+    int startT = 0;
+
+    init_farray( speed_array_, MAX_SPEED_COMPUTATIONS );
+    for (size_t i = 1; i < l; ++i) 
+    {
+        int prev = arr[i-1];
+        int curr = arr[i];
+        if( (! startEstimate) && is_low_transition( prev, curr ) )
+        {
+            startEstimate = true;
+            startT = t_[i];
+        }
+
+        else if( startEstimate && is_low_transition( prev, curr ) )
+        {
+            startEstimate = false;
+            float dt = t_[i] - startT;
+            // Compute speed in this pulse.
+            float speed = dW / dt;    // Speed in mm per ms 
+            numComputations += 1;
+            prependf( speed_array_, speed, MAX_SPEED_COMPUTATIONS );
+        }
     }
 
-    return false;
+    // Now compute the average speed.
+    float sum = 0.0;
+    //print_farray( speed_array_, MAX_SPEED_COMPUTATIONS );
+    
+    for (size_t i = 0; i < MAX_SPEED_COMPUTATIONS; i++ )
+        sum += speed_array_[ i ];
+
+    //print_farray( speed_array_, MAX_SPEED_COMPUTATIONS );
+    float speed = sum / min( numComputations, MAX_SPEED_COMPUTATIONS );
+    return speed;
 }
+
+int compute_direction( )
+{
+    init_array( down_trans1_, MAX_DIRECTION_COMPUTATION );
+    init_array( down_trans2_, MAX_DIRECTION_COMPUTATION );
+
+    bool lowTransInFirstSensor = false;
+    int firstSignalLowTime = 0;
+    for (size_t i = 1; i < l_; i++) 
+    {
+        int prev1 = motion1_[ i-1 ];
+        int cur1 = motion1_[ i  ];
+        if( (! lowTransInFirstSensor) && is_low_transition( prev1, cur1 ) )
+        {
+            prepend( down_trans1_, t_[i], MAX_DIRECTION_COMPUTATION );
+            firstSignalLowTime = t_[i];
+            lowTransInFirstSensor = true;
+            continue;
+        }
+
+        if( lowTransInFirstSensor )
+        {
+            int prev2 = motion2_[ i - 1];
+            int cur2 = motion2_[ i  ];
+            if( is_low_transition( prev2, cur2 ) )
+            {
+                prepend( down_trans2_, t_[i], MAX_DIRECTION_COMPUTATION );
+                lowTransInFirstSensor = false; // Reset
+            }
+        }
+    }
+
+    int diffN = 0;
+    for (size_t i = 0; i < MAX_DIRECTION_COMPUTATION; i++) 
+    {
+        if( down_trans1_[i] != 0 && down_trans2_[i] != 0 )
+        {
+            if( down_trans1_[ i] >= down_trans2_[i] )
+                diffN += down_trans1_[i] - down_trans2_[i];
+        }
+    }
+        
+    return diffN;
+}
+
+
 
 /**
  * @brief Write data line to Serial port.
@@ -127,20 +243,11 @@ bool is_command_read( char command, bool consume = true )
  * @param data
  * @param timestamp
  */
-void write_data_line( )
+void compute( )
 {
-    reset_watchdog( );
 
     // Just read the registers where pin data is saved.
-    int tone = digitalRead( TONE_PIN );
-    int led = digitalRead( LED_PIN ); 
-
-    int puff = digitalRead( PUFF_PIN ); 
-    int microscope = digitalRead( IMAGING_TRIGGER_PIN);
-    int camera = digitalRead( CAMERA_TTL_PIN ); 
-
-    unsigned long timestamp = millis() - trial_start_time_;
-
+    unsigned long timestamp = millis();
     int motion1;
     int motion2;
 
@@ -153,148 +260,32 @@ void write_data_line( )
     motion1 = digitalRead( MOTION1_PIN );
     motion2 = digitalRead( MOTION2_PIN );
 #endif
-    
-    sprintf(msg_  
-            , "%lu,%d,%d,%d,%d,%3d,%3d,%d,%d,%s"
-            , timestamp, trial_count_, puff, tone, led
-            , motion1, motion2, camera, microscope, trial_state_
-            );
-    Serial.println(msg_);
-    Serial.flush( );
-    //delay( 3 );
+
+    prepend( motion1_, motion1, l_ );
+    prepend( motion2_, motion2, l_ );
+
+    // Only time vector should be in APPEND. Rest are PREPEND.
+    append( t_, timestamp, l_ );
+
+    float speed1 = compute_speed( motion1_, l_, 12.5);
+    float speed2 = compute_speed( motion2_, l_, 14.0);
+
+    int direction = compute_direction( );
+
+    analogWrite( SPEED_OUT_PIN, ceil(255.0 * speed1) );
+
+    Serial.print( speed1, 4);
+    Serial.print( ' ' );
+    Serial.print( speed2, 4 );
+    Serial.print( ' ' );
+    Serial.println( direction );
+
 }
-
-void check_for_reset( void )
-{
-    if( is_command_read( 'r', true ) )
-    {
-        Serial.println( ">>>Received r. Reboot in 2 seconds" );
-        reboot_ = true;
-    }
-}
-
-/**
- * @brief Play tone for given period and duty cycle. 
- *
- * NOTE: We can not block the arduino using delay, since we have to write the
- * values onto Serial as well.
- *
- * @param period
- * @param duty_cycle
- */
-void play_tone( unsigned long period, double duty_cycle = 0.5 )
-{
-    reset_watchdog( );
-    check_for_reset( );
-    unsigned long toneStart = millis();
-    while( millis() - toneStart <= period )
-    {
-        write_data_line();
-        if( millis() - toneStart <= (period * duty_cycle) )
-            tone( TONE_PIN, TONE_FREQ );
-        else
-            noTone( TONE_PIN );
-    }
-    noTone( TONE_PIN );
-}
-
-
-/**
- * @brief Play puff for given duration.
- *
- * @param duration
- */
-void play_puff( unsigned long duration )
-{
-    check_for_reset( );
-    stamp_ = millis();
-    while( millis() - stamp_ <= duration )
-    {
-        digitalWrite( PUFF_PIN, HIGH);
-        write_data_line( );
-    }
-    digitalWrite( PUFF_PIN, LOW );
-}
-
-void led_on( unsigned int duration )
-{
-    stamp_ = millis( );
-    while( millis() - stamp_ <= duration )
-    {
-        digitalWrite( LED_PIN, HIGH );
-        write_data_line( );
-    }
-    digitalWrite( LED_PIN, LOW );
-}
-
-
-/**
- * @brief Wait for trial to start.
- */
-void wait_for_start( )
-{
-    sprintf( trial_state_, "INVA" );
-    while( true )
-    {
-
-        /*-----------------------------------------------------------------------------
-         *  Make sure each after reading command, we send >>>Received to serial
-         *  port. The python client waits for it.
-         *-----------------------------------------------------------------------------*/
-        write_data_line( );
-        if( is_command_read( 's', true ) )
-        {
-            Serial.println( ">>>Received r. Start" );
-            break;                              /* Only START can break the loop */
-        }
-        else if( is_command_read( 'p', true ) ) 
-        {
-            Serial.println( ">>>Received p. Playing puff" );
-            play_puff( PUFF_DURATION );
-        }
-        else if( is_command_read( 't', true ) ) 
-        {
-            Serial.println( ">>>Received t. Playing tone" );
-            play_tone( TONE_DURATION, 1.0);
-        }
-        else if( is_command_read( 'l', true ) ) 
-        {
-            Serial.println( ">>>Received l. LED ON" );
-            led_on( LED_DURATION );
-        }
-        else
-        {
-            char c = Serial.read( );
-            if( c != -1 )
-            {
-                Serial.print( ">>> Unknown command : " );
-                Serial.println( c );
-            }
-        }
-    }
-}
-
 
 void setup()
 {
-    Serial.begin( 57600 );
-
-    // Random seed.
-    randomSeed( analogRead(A5) );
-
-    //esetup watchdog. If not reset in 2 seconds, it reboots the system.
-    wdt_enable( WDTO_2S );
-    wdt_reset();
+    Serial.begin( 38400 );
     stamp_ = millis( );
-
-    pinMode( TONE_PIN, OUTPUT );
-    pinMode( PUFF_PIN, OUTPUT );
-    pinMode( LED_PIN, OUTPUT );
-
-    pinMode( CAMERA_TTL_PIN, OUTPUT );
-    pinMode( IMAGING_TRIGGER_PIN, OUTPUT );
-
-
 
 #ifdef USE_MOUSE
     // Configure mouse here
@@ -306,162 +297,16 @@ void setup()
     pinMode( MOTION2_PIN, INPUT );
 #endif
 
-    wait_for_start( );
+    pinMode( SPEED_OUT_PIN, OUTPUT );
+
+    init_array( motion1_, l_ );
+    init_array( motion2_, l_ );
+    init_array( t_, l_ );
+    init_farray( speed_array_, MAX_SPEED_COMPUTATIONS );
 }
 
-void do_zero_trial( )
-{
-    return;
-}
-
-void do_first_trial( )
-{
-    return;
-}
-
-/**
- * @brief Do a single trial.
- *
- * @param trial_num. Index of the trial.
- * @param ttype. Type of the trial.
- */
-void do_trial( unsigned int trial_num, bool isporobe = false )
-{
-    reset_watchdog( );
-    check_for_reset( );
-
-    trial_start_time_ = millis( );
-
-    /*-----------------------------------------------------------------------------
-     *  PRE. Start imaging for 10 seconds.
-     *-----------------------------------------------------------------------------*/
-    unsigned duration = 5000;
-    if (trial_num == 1)
-	delay(60); // Shutter delay; Only for the first trial
-
-    stamp_ = millis( );
-
-    sprintf( trial_state_, "PRE_" );
-    digitalWrite( IMAGING_TRIGGER_PIN, HIGH);   /* Start imaging. */
-
-    digitalWrite( CAMERA_TTL_PIN, LOW );
-    digitalWrite( LED_PIN, LOW );
-
-    while( (millis( ) - trial_start_time_ ) <= duration ) /* PRE_ time */
-    {
-        // 500 ms before the PRE_ ends, start camera pin high. We start
-        // recording as well.
-        if( (millis( ) - stamp_) >= (duration - 500 ) )
-            if( LOW == digitalRead( CAMERA_TTL_PIN ) )
-                digitalWrite( CAMERA_TTL_PIN, HIGH );
-
-        write_data_line( );
-    }
-    stamp_ = millis( );
-
-    /*-----------------------------------------------------------------------------
-     *  CS: 50 ms duration. No tone is played here. Write LED pin to HIGH.
-     *-----------------------------------------------------------------------------*/
-    duration = LED_DURATION;
-    stamp_ = millis( );
-    sprintf( trial_state_, "CS+" );
-    led_on( duration );
-    stamp_ = millis( );
-
-    /*-----------------------------------------------------------------------------
-     *  TRACE. The duration of trace varies from trial to trial.
-     *-----------------------------------------------------------------------------*/
-    duration = 250;
-    sprintf( trial_state_, "TRAC" );
-    while( (millis( ) - stamp_) <= duration )
-        write_data_line( );
-    stamp_ = millis( );
-
-    /*-----------------------------------------------------------------------------
-     *  PUFF for 50 ms.
-     *-----------------------------------------------------------------------------*/
-    duration = PUFF_DURATION;
-    if( isporobe )
-    {
-        sprintf( trial_state_, "PROB" );
-        while( (millis( ) - stamp_) <= duration )
-            write_data_line( );
-    }
-    else
-    {
-        sprintf( trial_state_, "PUFF" );
-        play_puff( duration );
-    }
-    stamp_ = millis( );
-    
-    /*-----------------------------------------------------------------------------
-     *  POST, flexible duration till trial is over. It is 10 second long.
-     *-----------------------------------------------------------------------------*/
-    // Last phase is post. If we are here just spend rest of time here.
-    duration = 5000;
-    sprintf( trial_state_, "POST" );
-    while( (millis( ) - stamp_) <= duration )
-    {
-        write_data_line( );
-        // Switch camera OFF after 500 ms into POST.
-        if( (millis() - stamp_) >= 500 )
-            digitalWrite( CAMERA_TTL_PIN, LOW );
-
-    }
-
-    /*-----------------------------------------------------------------------------
-     *  End trial.
-     *-----------------------------------------------------------------------------*/
-    digitalWrite( IMAGING_TRIGGER_PIN, LOW ); /* Shut down the imaging. */
-    Serial.print( ">>END Trial " );
-    Serial.print( trial_count_ );
-    Serial.println( " is over. Starting new");
-}
 
 void loop()
 {
-    reset_watchdog( );
-    // The probe trial occurs every 7th trial with +/- of 2 trials.
-    unsigned numProbeTrials = 0;
-    unsigned nextProbbeTrialIndex = random(5, 10);
-
-    for (size_t i = 1; i <= 81; i++) 
-    {
-        reset_watchdog( );
-
-        // Probe trial.
-        if( i == nextProbbeTrialIndex )
-        {
-            do_trial( i, true );
-            numProbeTrials +=1 ;
-            nextProbbeTrialIndex = random( 
-                    (numProbeTrials+1)*10-2, (numProbeTrials+1)*10+3
-                    );
-        }
-        else
-            do_trial( i, false );
-
-        
-        /*-----------------------------------------------------------------------------
-         *  ITI.
-         *-----------------------------------------------------------------------------*/
-        unsigned long rduration = random( 10000, 15001);
-        stamp_ = millis( );
-        sprintf( trial_state_, "ITI_" );
-        while((millis( ) - stamp_) <= rduration )
-        {
-            reset_watchdog( );
-            delay( 10 );
-        }
-
-        trial_count_ += 1;
-    }
-
-    // Do do anything once trails are over.
-    while( true )
-    {
-        reset_watchdog( );
-        Serial.println( ">>> All done" );
-        delay( 1000 );
-    }
+    compute( );
 }
