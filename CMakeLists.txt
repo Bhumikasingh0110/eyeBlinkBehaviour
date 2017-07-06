@@ -20,7 +20,7 @@ if (NOT PORT )
         "\n and run the arduino target. If you are sure that arduino board is "
         "\n connected and functional, you should provide port path from "
         "\n command line: e.g. \n"
-        "\t -DPORT=/dev/ttyACM0 etc."
+        "\t cmake -DPORT=/dev/ttyACM0 .."
         "\n\n Or you may not be part of 'dailout' group?"
         )
 else (NOT PORT)
