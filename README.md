@@ -27,6 +27,13 @@ Once bootstrap is successful, to build and upload to arduino
 Press `CTRL+C` in terminal to close the session. If just running `make
 miniterm`, press `CTRL+]` to come out of miniterm (scrolling text).
 
+## CMake options
+
+### Port
+
+If you need to change the arduino port, pass `-DPORT=/path/to/port` option to cmake. On a linux system, e.g.
+
+     $ cmake -DPORT=/dev/ttyACM1 -DANIMAL_NAME=k2 -DSESSION_NUM=1 -DSESSION_TYPE=2 ..
 
 # Dependencies
 
